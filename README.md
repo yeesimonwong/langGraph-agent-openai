@@ -1,5 +1,5 @@
-# Objective
-use LLM to resolve conflict when PIP install -r requirements.txt  
+# Autonomation Target
+1.) 2025 July 12 -> use LLM to automate conflict resolution retry during "PIP install -r requirements.txt"
 
 # setup
 python3.11 -m venv langGraph-agent-openai  
