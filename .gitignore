@@ -1,5 +1,6 @@
 # local
 langGraph-agent-openai/
+bad/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
