@@ -1,3 +1,9 @@
+# setup
+python3.11 -m venv langGraph-agent-openai  
+source ./langGraph-agent-openai/bin/activate  
+pip install --upgrade pip  
+pip install -r requirements.txt  
+
 # .env
 OPENAI_API_KEY=  
 TAVILY_API_KEY=  
@@ -11,3 +17,6 @@ SSH_USERNAME=
 SSH_PASSWORD=  
 REMOTE_PATH=  
 REQ_PATH=  
+
+# run
+python agent.py
