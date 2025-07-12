@@ -1,3 +1,6 @@
+# Objective
+use LLM to resolve conflict when PIP install -r requirements.txt  
+
 # setup
 python3.11 -m venv langGraph-agent-openai  
 source ./langGraph-agent-openai/bin/activate  
