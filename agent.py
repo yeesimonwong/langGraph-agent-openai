@@ -165,7 +165,7 @@ def create_venv() -> dict:
     logger.info(f"Creating venv at {venv_path} on remote server")
     try:
         ssh = get_ssh_client()
-        python_cmd = os.getenv("PYTHON_VERSION", "python3.11")
+        python_cmd = os.getenv("PYTHON_VERSION", "python3")
         stdin, stdout, stderr = ssh.exec_command(f"{python_cmd} --version")
         stderr_output = stderr.read().decode()
         stdout_output = stdout.read().decode()
