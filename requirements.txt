@@ -15,3 +15,41 @@ httpx-socks
 httpx[socks]
 langchain-tavily
 paramiko
+python-dotenv
+# Core Python package manager
+pip>=24.2
+
+# PDF extraction tools
+pdfplumber>=0.11.4
+unstructured[pdf]>=0.15.0  # Includes Tesseract for OCR support
+
+# Text processing and RAG framework
+langchain>=0.3.0
+
+# Embedding model
+sentence-transformers>=3.1.0
+
+# Optional: Cloud-based embedding (uncomment if using Cohere)
+# cohere>=5.9.0
+
+# Vector database
+chromadb>=0.5.0
+
+# Optional: Cloud-based vector database (uncomment if using Pinecone)
+# pinecone-client>=5.0.0
+
+# LLM integration
+transformers>=4.45.0
+torch>=2.4.0  # For GPU acceleration if available
+langchain-groq>=0.2.0  # For xAI Grok API integration
+
+# Deployment tools
+fastapi>=0.115.0
+uvicorn>=0.30.0
+streamlit>=1.40.0
+
+# Optional: Advanced vector database (uncomment if using Weaviate)
+# weaviate-client>=1.27.0
+
+# Optional: For scientific PDFs with chemical structures
+# rdkit>=2023.9.5
