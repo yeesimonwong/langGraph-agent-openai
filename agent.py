@@ -14,6 +14,11 @@ import uuid
 from pydantic import BaseModel, Field
 import tempfile
 import re
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_openai import OpenAIEmbeddings
+from langchain.chains import RetrievalQA
 
 # Set up logging
 logging.basicConfig(
@@ -70,6 +75,7 @@ class AgentState(TypedDict):
     venv_created: bool
     file_copied: bool
     pip_installed: bool
+    rag_created: bool
     error_message: str
     user_input_needed: bool
     pip_retry_count: int
@@ -277,6 +283,181 @@ def install_requirements() -> dict:
         }
 
 @tool
+def create_rag(pdf_path: str = "document.pdf") -> dict:
+    """Create a RAG system from a PDF file on the remote server."""
+    remote_path = os.getenv("REMOTE_PATH", "test01")
+    venv_path = f"{remote_path}/venv"
+    rag_path = f"{remote_path}/rag_system"
+    
+    logger.info(f"Creating RAG system at {rag_path} from PDF: {pdf_path}")
+    
+    try:
+        # Copy PDF to remote server
+        remote_pdf_path = f"{remote_path}/{os.path.basename(pdf_path)}"
+        ssh = get_ssh_client()
+        sftp = ssh.open_sftp()
+        
+        # Check if PDF exists locally
+        if not os.path.exists(pdf_path):
+            logger.error(f"PDF file {pdf_path} not found locally")
+            sftp.close()
+            ssh.close()
+            return {
+                "rag_created": False,
+                "error_message": f"PDF file {pdf_path} not found locally",
+                "command_outputs": [f"Create RAG from {pdf_path}\nError: PDF file not found"]
+            }
+        
+        sftp.put(pdf_path, remote_pdf_path)
+        sftp.close()
+        
+        # Create RAG directory
+        stdin, stdout, stderr = ssh.exec_command(f"mkdir -p {rag_path}")
+        stderr_output = stderr.read().decode()
+        if stderr_output:
+            logger.error(f"Failed to create RAG directory {rag_path}: {stderr_output}")
+            ssh.close()
+            return {
+                "rag_created": False,
+                "error_message": f"Failed to create RAG directory: {stderr_output}",
+                "command_outputs": [f"mkdir -p {rag_path}\nError: {stderr_output}"]
+            }
+        
+        # Generate RAG Python script
+        rag_script_content = f'''#!/usr/bin/env python3
+"""
+RAG System for PDF Document
+Generated on {remote_path}
+"""
+
+import os
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain.chains import RetrievalQA
+
+class PDFRAG:
+    def __init__(self, pdf_path, openai_api_key):
+        self.pdf_path = pdf_path
+        self.llm = ChatOpenAI(
+            model="gpt-4-turbo",
+            temperature=0,
+            openai_api_key=openai_api_key
+        )
+        self.embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
+        self.vectorstore = None
+        self.qa_chain = None
+        self.setup_rag()
+    
+    def setup_rag(self):
+        """Load PDF, create embeddings, and setup retrieval chain"""
+        print(f"Loading PDF: {{self.pdf_path}}")
+        loader = PyPDFLoader(self.pdf_path)
+        documents = loader.load()
+        
+        print("Splitting documents into chunks")
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200
+        )
+        texts = text_splitter.split_documents(documents)
+        
+        print("Creating vector store")
+        self.vectorstore = Chroma.from_documents(
+            documents=texts,
+            embedding=self.embeddings,
+            persist_directory="./chroma_db"
+        )
+        
+        print("Setting up QA chain")
+        self.qa_chain = RetrievalQA.from_chain_type(
+            llm=self.llm,
+            chain_type="stuff",
+            retriever=self.vectorstore.as_retriever(search_kwargs={{"k": 3}})
+        )
+        print("RAG system setup complete!")
+    
+    def query(self, question: str):
+        """Query the RAG system"""
+        if self.qa_chain:
+            result = self.qa_chain.run(question)
+            return result
+        else:
+            return "RAG system not initialized"
+
+if __name__ == "__main__":
+    import os
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        print("Error: OPENAI_API_KEY environment variable not set")
+        exit(1)
+    
+    rag = PDFRAG("{remote_pdf_path}", api_key)
+    
+    while True:
+        question = input("\\nEnter your question (or 'quit' to exit): ")
+        if question.lower() == 'quit':
+            break
+        answer = rag.query(question)
+        print(f"Answer: {{answer}}")
+'''
+        
+        # Write RAG script to remote server
+        rag_script_path = f"{rag_path}/rag_system.py"
+        script_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.py')
+        script_file.write(rag_script_content)
+        script_file_path = script_file.name
+        script_file.close()
+        
+        sftp = ssh.open_sftp()
+        sftp.put(script_file_path, rag_script_path)
+        os.unlink(script_file_path)
+        sftp.close()
+        
+        # Set execute permissions for the script
+        stdin, stdout, stderr = ssh.exec_command(f"chmod +x {rag_script_path}")
+        stderr_output = stderr.read().decode()
+        if stderr_output:
+            logger.error(f"Failed to set permissions for {rag_script_path}: {stderr_output}")
+            ssh.close()
+            return {
+                "rag_created": False,
+                "error_message": f"Failed to set permissions: {stderr_output}",
+                "command_outputs": [f"chmod +x {rag_script_path}\nError: {stderr_output}"]
+            }
+        
+        # Test RAG creation
+        test_command = f"cd {rag_path} && source {venv_path}/bin/activate && python rag_system.py"
+        stdin, stdout, stderr = ssh.exec_command(test_command)
+        test_output = stdout.read().decode()
+        test_error = stderr.read().decode()
+        ssh.close()
+        
+        if test_error and "Error" in test_error:
+            logger.error(f"RAG creation test failed: {test_error}")
+            return {
+                "rag_created": False,
+                "error_message": f"RAG setup failed: {test_error}",
+                "command_outputs": [f"Create RAG from {pdf_path}\nTest output: {test_error}"]
+            }
+        
+        logger.info(f"RAG system created successfully at {rag_path}")
+        return {
+            "rag_created": True,
+            "error_message": "",
+            "command_outputs": [f"RAG system created at {rag_path} from {pdf_path}\nTest output: {test_output}"]
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to create RAG: {str(e)}")
+        return {
+            "rag_created": False,
+            "error_message": f"Failed to create RAG: {str(e)}",
+            "command_outputs": [f"Create RAG from {pdf_path}\nError: {str(e)}"]
+        }
+
+@tool
 def resolve_conflicts(error_message: str) -> dict:
     """Use LLM to resolve dependency conflicts by generating a new requirements.txt."""
     remote_path = os.getenv("REMOTE_PATH", "test01")
@@ -313,7 +494,7 @@ def resolve_conflicts(error_message: str) -> dict:
         {current_requirements}
         ```
 
-        Analyze the error and generate a new `requirements.txt` with compatible package versions to resolve the conflict. Include all packages from the original list (langchain-core, langchain-openai, paramiko, pydantic) with mutually compatible versions. Use the latest compatible versions available as of July 2025 unless specific versions are required to resolve the conflict.
+        Analyze the error and generate a new `requirements.txt` with compatible package versions to resolve the conflict. Include all packages from the original list with mutually compatible versions. Use the latest compatible versions available as of September 2025 unless specific versions are required to resolve the conflict.
 
         **Important**: Return only the new `requirements.txt` content as plain text, with one package per line in the format `package==version`. For example:
         langchain-core==0.3.68
@@ -428,6 +609,14 @@ def install_requirements_node(state: AgentState):
     state["command_outputs"].extend(result["command_outputs"])
     return state
 
+def create_rag_node(state: AgentState):
+    logger.info("Entering create_rag_node")
+    result = create_rag.invoke({"pdf_path": os.getenv("PDF_PATH", "document.pdf")})
+    state["messages"].append(HumanMessage(content=f"RAG creation result: {result}"))
+    state.update(result)
+    state["command_outputs"].extend(result["command_outputs"])
+    return state
+
 def resolve_conflicts_node(state: AgentState):
     logger.info("Entering resolve_conflicts_node")
     result = resolve_conflicts.invoke({"error_message": state["error_message"]})
@@ -443,16 +632,20 @@ def route_flow(state: AgentState) -> str:
                 f"venv_created={state.get('venv_created', False)}, "
                 f"file_copied={state.get('file_copied', False)}, "
                 f"pip_installed={state.get('pip_installed', False)}, "
+                f"rag_created={state.get('rag_created', False)}, "
                 f"pip_retry_count={state.get('pip_retry_count', 0)}")
+    
     if state.get("pip_retry_count", 0) > 5:
         logger.error("Exiting due to max retry limit exceeded")
         return "end"
+    
     if state.get("error_message", ""):
         if "Dependency conflict" in state["error_message"]:
             return "resolve_conflicts"
         if "Invalid requirement" in state["error_message"] or "Failed to install requirements" in state["error_message"]:
             return "end"  # Stop if LLM output is invalid or other pip errors persist
         return "install_requirements"  # Retry for other pip errors
+    
     if not state.get("setup_success", False):
         return "ssh_login"
     if not state.get("folder_created", False):
@@ -463,6 +656,8 @@ def route_flow(state: AgentState) -> str:
         return "copy_requirements"
     if not state.get("pip_installed", False):
         return "install_requirements"
+    if not state.get("rag_created", False):
+        return "create_rag"
     return "end"
 
 # Build graph
@@ -472,71 +667,125 @@ workflow.add_node("create_folder", create_folder_node)
 workflow.add_node("create_venv", create_venv_node)
 workflow.add_node("copy_requirements", copy_requirements_node)
 workflow.add_node("install_requirements", install_requirements_node)
+workflow.add_node("create_rag", create_rag_node)
 workflow.add_node("resolve_conflicts", resolve_conflicts_node)
+
 workflow.set_entry_point("ssh_login")
+
+# Define conditional edges
 workflow.add_conditional_edges(
     "ssh_login",
     route_flow,
-    {"ssh_login": "ssh_login", "create_folder": "create_folder", "install_requirements": "install_requirements", "end": END}
+    {
+        "ssh_login": "ssh_login", 
+        "create_folder": "create_folder", 
+        "install_requirements": "install_requirements", 
+        "create_rag": "create_rag",
+        "end": END
+    }
 )
 workflow.add_conditional_edges(
     "create_folder",
     route_flow,
-    {"create_folder": "create_folder", "create_venv": "create_venv", "install_requirements": "install_requirements", "end": END}
+    {
+        "create_folder": "create_folder", 
+        "create_venv": "create_venv", 
+        "install_requirements": "install_requirements",
+        "create_rag": "create_rag", 
+        "end": END
+    }
 )
 workflow.add_conditional_edges(
     "create_venv",
     route_flow,
-    {"create_venv": "create_venv", "copy_requirements": "copy_requirements", "install_requirements": "install_requirements", "end": END}
+    {
+        "create_venv": "create_venv", 
+        "copy_requirements": "copy_requirements", 
+        "install_requirements": "install_requirements",
+        "create_rag": "create_rag", 
+        "end": END
+    }
 )
 workflow.add_conditional_edges(
     "copy_requirements",
     route_flow,
-    {"copy_requirements": "copy_requirements", "install_requirements": "install_requirements", "end": END}
+    {
+        "copy_requirements": "copy_requirements", 
+        "install_requirements": "install_requirements",
+        "create_rag": "create_rag", 
+        "end": END
+    }
 )
 workflow.add_conditional_edges(
     "install_requirements",
     route_flow,
-    {"install_requirements": "install_requirements", "resolve_conflicts": "resolve_conflicts", "end": END}
+    {
+        "install_requirements": "install_requirements", 
+        "resolve_conflicts": "resolve_conflicts",
+        "create_rag": "create_rag", 
+        "end": END
+    }
+)
+workflow.add_conditional_edges(
+    "create_rag",
+    route_flow,
+    {
+        "create_rag": "create_rag",
+        "end": END
+    }
 )
 workflow.add_conditional_edges(
     "resolve_conflicts",
     route_flow,
-    {"install_requirements": "install_requirements", "end": END}
+    {
+        "install_requirements": "install_requirements",
+        "create_rag": "create_rag", 
+        "end": END
+    }
 )
+
 graph = workflow.compile()
 
 # Run workflow
 initial_state = {
-    "messages": [HumanMessage(content="Start setup with SSH login to sodaray.com, create folder, create venv, copy requirements, install requirements, and resolve conflicts")],
+    "messages": [HumanMessage(content="Start setup with SSH login, create folder, create venv, copy requirements, install requirements, create RAG system")],
     "setup_success": False,
     "folder_created": False,
     "venv_created": False,
     "file_copied": False,
     "pip_installed": False,
+    "rag_created": False,
     "error_message": "",
     "user_input_needed": False,
     "pip_retry_count": 0,
     "command_outputs": []
 }
+
 try:
     config = {"configurable": {"thread_id": str(uuid.uuid4())}, "recursion_limit": 50}
     logger.info(f"Invoking graph with config: {config}")
     result = graph.invoke(initial_state, config)
-    if result.get("pip_installed", False):
-        logger.info("Workflow completed successfully")
-        print("ok")
+    
+    if result.get("rag_created", False):
+        logger.info("Workflow completed successfully with RAG system")
+        print("RAG system created successfully")
+    elif result.get("pip_installed", False):
+        logger.info("Workflow completed with packages installed, RAG creation pending")
+        print("Packages installed, RAG creation can be run separately")
     else:
-        logger.error(f"Workflow failed: {result['error_message']}")
-        print(f"Failed: {result['error_message']}")
+        logger.error(f"Workflow failed: {result.get('error_message', 'Unknown error')}")
+        print(f"Failed: {result.get('error_message', 'Unknown error')}")
+    
     print("\nFull command outputs:")
     for output in result["command_outputs"]:
         print(output)
+        
 except Exception as e:
     logger.error(f"Workflow failed: {str(e)}")
     print(f"Failed: {str(e)}")
     print("\nFull command outputs:")
-    for output in result["command_outputs"]:
+    for output in result.get("command_outputs", []):
         print(output)
 finally:
-    http_client.close()
+    if 'http_client' in locals():
+        http_client.close()
