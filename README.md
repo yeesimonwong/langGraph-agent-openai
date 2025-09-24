@@ -1,5 +1,6 @@
 # Autonomation Target
-2025 Jul 12 -> use LLM to automate conflict resolution retry during "PIP install -r requirements.txt"
+
+2025 Jul 12 -> use LLM to automate conflict resolution retry during "PIP install -r requirements.txt"  
 2025 Sep 24 -> use LLM to automate a local RAG creation and deploy the RAG as API service on a remote server - verified
 
 # setup
