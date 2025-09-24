@@ -6,22 +6,27 @@ langsmith
 langchain-community
 langchain-core
 langchain-openai
+langchain-huggingface
+langchain-chroma
 notebook
 tavily-python
 wikipedia
 trustcall
 langgraph-cli[inmem]
+httpx
 httpx-socks
 httpx[socks]
 langchain-tavily
 paramiko
+pydantic
 python-dotenv
 # Core Python package manager
 pip>=24.2
 
 # PDF extraction tools
 pdfplumber>=0.11.4
-unstructured[pdf]>=0.15.0  # Includes Tesseract for OCR support
+unstructured[pdf]>=0.15.0
+pypdf==6.1.0
 
 # Text processing and RAG framework
 langchain>=0.3.0
